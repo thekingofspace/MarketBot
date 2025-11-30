@@ -17,7 +17,7 @@ local Client = Discord.New(FinalIntent, BotInfo.token, 0, 1)
 local AllowedParents = {
     ["1444445784199139458"] = { 
         Identifer = "LF Investors",
-        LogChannel = "1444445891409875116",
+        LogChannel = "1444623240222740530",
         RecordChannel = "1444445891409875116";
         MinChars = 100;
         CreationMessage = `Thank you for creating a post! Refer to rules for rules on how posts work!`
@@ -25,7 +25,7 @@ local AllowedParents = {
 
     ["1444621799261212755"] = { 
         Identifer = "Help Forums",
-        LogChannel = "1444445891409875116",
+        LogChannel = "1444623240222740530",
         RecordChannel = "1444445891409875116";
         MinChars = 30;
         CreationMessage = `Please describe in depth what the issue you are having is.`
