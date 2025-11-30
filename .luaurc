@@ -3,7 +3,7 @@
     "lune": "~/.lune/.typedefs/0.10.4/"
   },
 
-  "globals": ["exposedbots"],
+  "globals": ["exposedbots", "CreationBoot", "ExposedMethods"],
 
     "lint": {
         "BuiltinGlobalWrite": false
