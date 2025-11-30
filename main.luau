@@ -255,24 +255,29 @@ local function HandleRemovalModal(Packet, ThreadID)
     RejectThread(ThreadID, Reason, Remover, CategoryName)
 end
 Client:On("thread_create", function(Packet)
-    if Packet.message_count ~= 0 or Packet.last_message_id ~= nil then
+    print(Packet)
+    if Packet.message_count ~= 0 or Packet.last_message_id ~= nil or Packet.newly_created == true then
         return
     end
+
     local Messages = Client:SendContext("Get", `channels/{Packet.id}/messages?after=0&limit=1`)
     local First = Messages[1]
     local Info = AllowedParents[tostring(Packet.parent_id)]
     if not Info then return end
+
     local msg = First and First.content or "*No starting message*"
     local author = First.author
     local ThreadID = tostring(Packet.id)
+    local ThreadTitle = Packet.name or "Untitled Thread"
     local UseFile = #msg >= 1000
+
     if #msg < MinChars then
         if author and author.id then
             if UseFile then
                 SendDM(
                     author.id,
                     "Post Removed",
-                    "Your post was removed by auto moderation.\n\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```",
+                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```",
                     0xFF0000,
                     "thread_message_" .. ThreadID .. ".txt",
                     msg
@@ -281,25 +286,29 @@ Client:On("thread_create", function(Packet)
                 SendDM(
                     author.id,
                     "Post Removed",
-                    "Your post was removed by auto moderation.\n\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```\n\nMessage Content:\n```" .. msg .. "```",
+                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```\n\nMessage Content:\n```" .. msg .. "```",
                     0xFF0000
                 )
             end
         end
+
         local RecordEmbed = {
             title = "Thread Auto-Removed",
             color = 0xFF0000,
             fields = {
                 { name = "Thread", value = `<#{ThreadID}>` },
+                { name = "Thread Title", value = ThreadTitle },
                 { name = "Reason", value = "```\nPost was under " .. MinChars .. " characters\n```"},
                 { name = "Author", value = author and (author.username .. " `" .. author.id .. "`)") or "Unknown" },
                 { name = "Category", value = Info.Identifer }
             }
         }
+
         if UseFile then
             Client:SendContext("Post", `channels/{RecordChannel}/messages`, {
                 embeds = { RecordEmbed }
             })
+
             SendMultipart(
                 Client, "Post",
                 `channels/{RecordChannel}/messages`,
@@ -312,30 +321,37 @@ Client:On("thread_create", function(Packet)
                 name = "Message Content",
                 value = "```\n" .. msg .. "\n```"
             }
+
             Client:SendContext("Post", `channels/{RecordChannel}/messages`, {
                 embeds = { RecordEmbed }
             })
         end
+
         Client:SendContext("Delete", `channels/{ThreadID}`)
         ClearPending(ThreadID)
         return
     end
+
     local Short = (#msg > 1000) and (msg:sub(1,997) .. "...") or msg
+
     if Info.RuleMessage then
         Client:SendContext("Post", `channels/{Packet.id}/messages`, {
             content = `Thank you for creating a post! Refer to <#{Info.RuleMessage}> for rules on how posts work!`
         })
     end
+
     local Embed = {
         title = `New {Info.Identifer} thread created!`,
-        description = "**Message Text:**\n\n" .. Short .. `\n\n<#{First.id}>`,
+        description = "**Thread Title:** " .. ThreadTitle .. "\n\n**Message Text:**\n\n" .. Short .. `\n\n<#{First.id}>`,
         color = 0x00AEEF,
         footer = { text = "Thread started by " .. author.username }
     }
+
     local Options = {}
     for key in pairs(QuickRejectReasons) do
         table.insert(Options, { label = key, value = key })
     end
+
     local Components = {
         {
             type = 1,
@@ -356,18 +372,22 @@ Client:On("thread_create", function(Packet)
             }}
         }
     }
+
     local Sent = Client:SendContext("Post", `channels/{LogChannel}/messages`, {
         embeds = {Embed},
         components = Components
     })
+
     if Sent and Sent.id then
         SetPending(ThreadID, {
             message_id = Sent.id,
             channel_id = LogChannel,
-            category_name = Info.Identifer
+            category_name = Info.Identifer,
+            thread_title = ThreadTitle
         })
     end
 end)
+
 Client:On("thread_delete", function(Packet)
     local ThreadID = tostring(Packet.id)
     local Pending = PendingRemovals[ThreadID]
