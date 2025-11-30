@@ -255,8 +255,7 @@ local function HandleRemovalModal(Packet, ThreadID)
     RejectThread(ThreadID, Reason, Remover, CategoryName)
 end
 Client:On("thread_create", function(Packet)
-    print(Packet)
-    if Packet.message_count ~= 0 or Packet.last_message_id ~= nil or Packet.newly_created == true then
+    if Packet.message_count ~= 0 or Packet.last_message_id ~= nil or Packet.newly_created == false then
         return
     end
 
