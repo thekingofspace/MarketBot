@@ -3,18 +3,36 @@ local Discord = require("./libs/Nactari")
 local fs, serde = require("@lune/fs"), require("@lune/serde")
 local task = require("@lune/task")
 local BotInfo:{token:string} = serde.decode("json", fs.readFile("./BotInfo.json"))
+
 local Intent = {
 	GUILDS = bit32.lshift(1, 0),
 	DIRECT_MESSAGES = bit32.lshift(1, 12),
 }
+
 local FinalIntent = 0
 for _, v in pairs(Intent) do FinalIntent += v end
+
 local Client = Discord.New(FinalIntent, BotInfo.token, 0, 1)
-local LogChannel = "1444445891409875116"
-local RecordChannel = "1444445891409875116"
+
 local AllowedParents = {
-    ["1444445784199139458"] = { Identifer = "LF Investors", RuleMessage = "1444445822388277420" }
+    ["1444445784199139458"] = { 
+        Identifer = "LF Investors",
+        LogChannel = "1444445891409875116",
+        RecordChannel = "1444445891409875116";
+        MinChars = 100;
+        CreationMessage = `Thank you for creating a post! Refer to rules for rules on how posts work!`
+    };
+
+    ["1444621799261212755"] = { 
+        Identifer = "Help Forums",
+        LogChannel = "1444445891409875116",
+        RecordChannel = "1444445891409875116";
+        MinChars = 30;
+        CreationMessage = `Please describe in depth what the issue you are having is.`
+    }
 }
+
+
 local QuickRejectReasons = {
     ["AI Generated"] = 
         "Post appears AI-generated\n\nThe writing style, structure, or phrasing strongly resembles common AI-generated patterns, including repetitive wording, overly formal tone, or lack of personal context.",
@@ -28,27 +46,32 @@ local QuickRejectReasons = {
         "Did not follow section rules\n\nThe post violates one or more of the section's posting requirements, such as missing templates, ignoring formatting guidelines, or breaking behavioral expectations.",
     ["[NA] Contact staff"] = "Contact staff in a ticket for this."
 }
-local MinChars = 100
 local PENDING_FILE = "./pending.json"
+
 local function LoadPending()
     if not fs.isFile(PENDING_FILE) then return {} end
     local ok, data = pcall(serde.decode, "json"::any, fs.readFile(PENDING_FILE))
     return ok and type(data) == "table" and data or {}
 end
+
 local function SavePending(tbl)
     fs.writeFile(PENDING_FILE, serde.encode("json", tbl))
 end
+
 local PendingRemovals = LoadPending()
+
 local function SetPending(ThreadID, data)
     PendingRemovals[ThreadID] = data
     SavePending(PendingRemovals)
     Logger:Info("Pending added: " .. ThreadID)
 end
+
 local function ClearPending(ThreadID)
     PendingRemovals[ThreadID] = nil
     SavePending(PendingRemovals)
     Logger:Info("Pending cleared: " .. ThreadID)
 end
+
 local function SendMultipart(Client, Method, Path, PayloadTable, FileName, FileContents)
     local boundary = "--------------------------" .. tostring(math.random(10000000,99999999))
     local payloadJson = serde.encode("json", PayloadTable)
@@ -67,6 +90,7 @@ local function SendMultipart(Client, Method, Path, PayloadTable, FileName, FileC
     }
     return Client:SendContext(Method, Path, body, headers)
 end
+
 local function SendDM(UserID, Title, Description, Color, FileName, FileContents)
     local DM = Client:SendContext("Post", "users/@me/channels", { recipient_id = tostring(UserID) })
     if not DM or not DM.id then return end
@@ -87,7 +111,6 @@ local function SendDM(UserID, Title, Description, Color, FileName, FileContents)
     })
     if FileName and FileContents then
         task.spawn(function()
-            task.wait(math.random(1,2))
             SendMultipart(
                 Client,
                 "Post",
@@ -99,18 +122,21 @@ local function SendDM(UserID, Title, Description, Color, FileName, FileContents)
         end)
     end
 end
+
 local function RespondEphemeral(Packet, Text)
     return Client:SendContext("Post", `interactions/{Packet.id}/{Packet.token}/callback`, {
         type = 4,
         data = { content = Text, flags = 64 }
     })
 end
+
 local function DeletePendingRemoval(ThreadID)
     local Pending = PendingRemovals[ThreadID]
     if not Pending then return end
     Client:SendContext("Delete", `channels/{Pending.channel_id}/messages/{Pending.message_id}`)
     ClearPending(ThreadID)
 end
+
 local function OpenRemovalModal(Packet, ThreadID, Prefill)
     return Client:SendContext("Post", `interactions/{Packet.id}/{Packet.token}/callback`, {
         type = 9,
@@ -133,6 +159,7 @@ local function OpenRemovalModal(Packet, ThreadID, Prefill)
         }
     })
 end
+
 local function HasManageMessages(Packet)
     if not Packet.member or not Packet.member.permissions then
         return false
@@ -140,6 +167,7 @@ local function HasManageMessages(Packet)
     local MANAGE_MESSAGES = bit32.lshift(1, 13)
     return bit32.band(Packet.member.permissions, MANAGE_MESSAGES) ~= 0
 end
+
 local function RequirePerms(Packet)
     if HasManageMessages(Packet) then
         return true
@@ -153,7 +181,8 @@ local function RequirePerms(Packet)
     })
     return false
 end
-local function LogApproval(ThreadID, Approver)
+
+local function LogApproval(ThreadID, Approver, RecordChannel)
     Client:SendContext("Post", `channels/{RecordChannel}/messages`, {
         embeds = {{
             title = "Thread Approved",
@@ -166,16 +195,24 @@ local function LogApproval(ThreadID, Approver)
         }}
     })
 end
+
 local function HandleApproval(Packet, ThreadID)
+    local Pending = PendingRemovals[ThreadID]
+    if not Pending then
+        return RespondEphemeral(Packet, "Thread data not found.")
+    end
+    
     DeletePendingRemoval(ThreadID)
     local Approver = Packet.member and Packet.member.user
-    LogApproval(ThreadID, Approver)
+    LogApproval(ThreadID, Approver, Pending.record_channel)
     return RespondEphemeral(Packet, "Thread approved.")
 end
+
 local function HandleRemovalButton(Packet, ThreadID)
     return OpenRemovalModal(Packet, ThreadID)
 end
-local function RejectThread(ThreadID, Reason, Remover, CategoryName)
+
+local function RejectThread(ThreadID, Reason, Remover, CategoryName, RecordChannel)
     DeletePendingRemoval(ThreadID)
     local Msgs = Client:SendContext("Get", `channels/{ThreadID}/messages?after=0&limit=1`)
     local First = Msgs[1]
@@ -203,6 +240,7 @@ local function RejectThread(ThreadID, Reason, Remover, CategoryName)
             )
         end
     end
+    
     local RecordEmbed = {
         title = "Thread Removed",
         color = 0xFF0000,
@@ -232,28 +270,44 @@ local function RejectThread(ThreadID, Reason, Remover, CategoryName)
         }
         Client:SendContext("Post", `channels/{RecordChannel}/messages`, { embeds = { RecordEmbed } })
     end
+    
     Client:SendContext("Delete", `channels/{ThreadID}`)
 end
+
 local function HandleQuickReject(Packet, ThreadID, Key)
     local Reason = QuickRejectReasons[Key] or "No reason provided"
     local Remover = Packet.member and Packet.member.user
     
     local Pending = PendingRemovals[ThreadID]
-    local CategoryName = Pending and Pending.category_name
+    if not Pending then
+        return RespondEphemeral(Packet, "Thread data not found.")
+    end
+    
+    local CategoryName = Pending.category_name
+    local RecordChannel = Pending.record_channel
     
     RespondEphemeral(Packet, "Post removed using quick reject.")
-    RejectThread(ThreadID, Reason, Remover, CategoryName)
+    RejectThread(ThreadID, Reason, Remover, CategoryName, RecordChannel)
+    return
 end
+
 local function HandleRemovalModal(Packet, ThreadID)
     local Reason = Packet.data.components[1].components[1].value
     local Remover = Packet.member and Packet.member.user
     
     local Pending = PendingRemovals[ThreadID]
-    local CategoryName = Pending and Pending.category_name
+    if not Pending then
+        return RespondEphemeral(Packet, "Thread data not found.")
+    end
+    
+    local CategoryName = Pending.category_name
+    local RecordChannel = Pending.record_channel
     
     RespondEphemeral(Packet, "Processing removal...")
-    RejectThread(ThreadID, Reason, Remover, CategoryName)
+    RejectThread(ThreadID, Reason, Remover, CategoryName, RecordChannel)
+    return
 end
+
 Client:On("thread_create", function(Packet)
     if Packet.message_count ~= 0 or Packet.last_message_id ~= nil or Packet.newly_created == false then
         return
@@ -269,14 +323,16 @@ Client:On("thread_create", function(Packet)
     local ThreadID = tostring(Packet.id)
     local ThreadTitle = Packet.name or "Untitled Thread"
     local UseFile = #msg >= 1000
+    local LogChannel = Info.LogChannel
+    local RecordChannel = Info.RecordChannel
 
-    if #msg < MinChars then
+    if #msg < Info.MinChars then
         if author and author.id then
             if UseFile then
                 SendDM(
                     author.id,
                     "Post Removed",
-                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```",
+                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. Info.MinChars .. " characters```",
                     0xFF0000,
                     "thread_message_" .. ThreadID .. ".txt",
                     msg
@@ -285,7 +341,7 @@ Client:On("thread_create", function(Packet)
                 SendDM(
                     author.id,
                     "Post Removed",
-                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. MinChars .. " characters```\n\nMessage Content:\n```" .. msg .. "```",
+                    "Your post was removed by auto moderation.\n\n**Thread Title:** " .. ThreadTitle .. "\n**Category:** " .. Info.Identifer .. "\n\nReason:\n```Post was under " .. Info.MinChars .. " characters```\n\nMessage Content:\n```" .. msg .. "```",
                     0xFF0000
                 )
             end
@@ -297,7 +353,7 @@ Client:On("thread_create", function(Packet)
             fields = {
                 { name = "Thread", value = `<#{ThreadID}>` },
                 { name = "Thread Title", value = ThreadTitle },
-                { name = "Reason", value = "```\nPost was under " .. MinChars .. " characters\n```"},
+                { name = "Reason", value = "```\nPost was under " .. Info.MinChars .. " characters\n```"},
                 { name = "Author", value = author and (author.username .. " `" .. author.id .. "`)") or "Unknown" },
                 { name = "Category", value = Info.Identifer }
             }
@@ -333,12 +389,11 @@ Client:On("thread_create", function(Packet)
 
     local Short = (#msg > 1000) and (msg:sub(1,997) .. "...") or msg
 
-    if Info.RuleMessage then
+    if Info.CreationMessage then
         Client:SendContext("Post", `channels/{Packet.id}/messages`, {
-            content = `Thank you for creating a post! Refer to <#{Info.RuleMessage}> for rules on how posts work!`
+            content = Info.CreationMessage
         })
     end
-
     local Embed = {
         title = `New {Info.Identifer} thread created!`,
         description = "**Thread Title:** " .. ThreadTitle .. "\n\n**Message Text:**\n\n" .. Short .. `\n\n<#{First.id}>`,
@@ -382,7 +437,8 @@ Client:On("thread_create", function(Packet)
             message_id = Sent.id,
             channel_id = LogChannel,
             category_name = Info.Identifer,
-            thread_title = ThreadTitle
+            thread_title = ThreadTitle,
+            record_channel = RecordChannel
         })
     end
 end)
@@ -394,6 +450,7 @@ Client:On("thread_delete", function(Packet)
     Client:SendContext("Delete", `channels/{Pending.channel_id}/messages/{Pending.message_id}`)
     ClearPending(ThreadID)
 end)
+
 Client:On("interaction_create", function(Packet)
     if not Packet.data then return end
     if Packet.type == 3 or Packet.type == 5 then
@@ -418,5 +475,6 @@ Client:On("interaction_create", function(Packet)
     end
     return
 end)
+
 Logger:Info("Client started.")
 Client:Start()
