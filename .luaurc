@@ -1,5 +1,11 @@
 {
   "aliases": {
     "lune": "~/.lune/.typedefs/0.10.4/"
-  }
+  },
+
+  "globals": ["exposedbots"],
+
+    "lint": {
+        "BuiltinGlobalWrite": false
+    }
 }
