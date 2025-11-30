@@ -1,5 +1,8 @@
 local Logger = require("./Logger")
-local Discord = require("./libs/Nactari"); require("./libs/NactariInteractions");
+local Discord = require("./libs/Nactari")
+local Interactions = require("./libs/NactariInteractions")
+
+type DiscodBot = Discord.DiscordBot & Interactions.BotOverload
 
 local fs, serde = require("@lune/fs"), require("@lune/serde")
 local task = require("@lune/task")
@@ -13,7 +16,7 @@ local Intent = {
 local FinalIntent = 0
 for _, v in pairs(Intent) do FinalIntent += v end
 
-local Client = Discord.New(FinalIntent, BotInfo.token, 0, 1)
+local Client:DiscodBot = Discord.New(FinalIntent, BotInfo.token, 0, 1)::any
 
 local AllowedParents = {
     ["1444445784199139458"] = { 
