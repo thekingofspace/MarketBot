@@ -1,7 +1,9 @@
 local Logger = require("./Logger")
-local Discord = require("./libs/Nactari")
-require("./libs/NactariDependants")
-require("./libs/NactariInteractions")
+local Discord = require("./libs/Nactari"); require("./libs/NactariDependants")
+
+local Interactions = require("./libs/NactariInteractions")
+
+type DiscordBot = Discord.DiscordBot & Interactions.Interactable<DiscordBot>
 
 local fs, serde = require("@lune/fs"), require("@lune/serde")
 local task = require("@lune/task")
@@ -15,7 +17,7 @@ local Intent = {
 local FinalIntent = 0
 for _, v in pairs(Intent) do FinalIntent += v end
 
-local Client = Discord.New(FinalIntent, BotInfo.token, 0, 1)
+local Client:DiscordBot = Discord.New(FinalIntent, BotInfo.token, 0, 1)::any
 
 local AllowedParents = {
     ["1444445784199139458"] = { 
@@ -127,7 +129,7 @@ local function SendDM(UserID, Title, Description, Color, FileName, FileContents)
 end
 
 local function RespondEphemeral(Packet, Text)
-    return Client:SendContext("Post", `interactions/{Packet.id}/{Packet.token}/callback`, {
+    return Client:RespondInteraction(Packet, {
         type = 4,
         data = { content = Text, flags = 64 }
     })
@@ -141,7 +143,7 @@ local function DeletePendingRemoval(ThreadID)
 end
 
 local function OpenRemovalModal(Packet, ThreadID, Prefill)
-    return Client:SendContext("Post", `interactions/{Packet.id}/{Packet.token}/callback`, {
+    return Client:RespondInteraction(Packet, {
         type = 9,
         data = {
             custom_id = "remove_modal_" .. ThreadID,
@@ -175,7 +177,7 @@ local function RequirePerms(Packet)
     if HasManageMessages(Packet) then
         return true
     end
-    Client:SendContext("Post", `interactions/{Packet.id}/{Packet.token}/callback`, {
+    Client:RespondInteraction(Packet, {
         type = 4,
         data = {
             content = "You must have **Manage Messages** to use this.",
@@ -454,28 +456,41 @@ Client:On("thread_delete", function(Packet)
     ClearPending(ThreadID)
 end)
 
-Client:On("interaction_create", function(Packet)
-    if not Packet.data then return end
-    if Packet.type == 3 or Packet.type == 5 then
-        if not RequirePerms(Packet) then
-            return
-        end
+Client:On("MESSAGE_COMPONENT", function(Packet)
+    if not RequirePerms(Packet) then
+        return
     end
+
     local ID = Packet.data.custom_id
-    if Packet.type == 3 and ID:find("thread_allow_") then
+
+    if ID:find("thread_allow_") then
         return HandleApproval(Packet, ID:gsub("thread_allow_", ""))
     end
-    if Packet.type == 3 and ID:find("thread_remove_") then
+
+    if ID:find("thread_remove_") then
         return HandleRemovalButton(Packet, ID:gsub("thread_remove_", ""))
     end
-    if Packet.type == 3 and ID:find("quick_reject_") then
+
+    if ID:find("quick_reject_") then
         local ThreadID = ID:gsub("quick_reject_", "")
         local Key = Packet.data.values[1]
         return HandleQuickReject(Packet, ThreadID, Key)
     end
-    if Packet.type == 5 and ID:find("remove_modal_") then
+
+    return
+end)
+
+Client:On("MODAL_SUBMIT", function(Packet)
+    if not RequirePerms(Packet) then
+        return
+    end
+    
+    local ID = Packet.data.custom_id
+
+    if ID:find("remove_modal_") then
         return HandleRemovalModal(Packet, ID:gsub("remove_modal_", ""))
     end
+
     return
 end)
 
