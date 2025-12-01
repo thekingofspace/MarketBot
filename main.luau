@@ -1,5 +1,7 @@
 local Logger = require("./Logger")
 local Discord = require("./libs/Nactari")
+require("./libs/NactariDependants")
+require("./libs/NactariInteractions")
 
 local fs, serde = require("@lune/fs"), require("@lune/serde")
 local task = require("@lune/task")
