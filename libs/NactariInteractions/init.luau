@@ -74,23 +74,24 @@ table.insert(CreationBoot, function(self)
         local Type = Packet.type
 
         if Type == InteractionType.PING then
-            return self:RespondInteraction(Packet, { type = 1 })
+            self:RespondInteraction(Packet, { type = 1 })
+            return Packet
         end
 
         local Key = Routes[Type]
         if not Key then
-            return
+            return Packet
         end
 
         local Handler = self:Grab(Key)
 
         if not Handler then
-            return
+            return Packet
         end
 
         Handler:Run(Packet)
 
-        return
+        return Packet
     end)
 
 end)
