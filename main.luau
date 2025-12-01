@@ -456,7 +456,7 @@ Client:On("thread_delete", function(Packet)
     ClearPending(ThreadID)
 end)
 
-Client:On("MESSAGE_COMPONENT", function(Packet)
+Client:On(Client.Enums.InteractionTypes.MESSAGE_COMPONENT, function(Packet)
     if not RequirePerms(Packet) then
         return
     end
@@ -480,7 +480,7 @@ Client:On("MESSAGE_COMPONENT", function(Packet)
     return
 end)
 
-Client:On("MODAL_SUBMIT", function(Packet)
+Client:On(Client.Enums.InteractionTypes.MODAL_SUBMIT, function(Packet)
     if not RequirePerms(Packet) then
         return
     end
