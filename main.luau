@@ -3,21 +3,17 @@ local Discord = require("./libs/Nactari"); require("./libs/NactariDependants")
 
 local Interactions = require("./libs/NactariInteractions")
 
-type DiscordBot = Discord.DiscordBot & Interactions.Interactable<DiscordBot>
+local MessageComponents = require("./libs/Nactari_Messages")
+
+local Intents = require("./libs/Intents")
+
+type DiscordBot = Discord.DiscordBot & Interactions.Interactable<DiscordBot> & MessageComponents.Messagable<DiscordBot>
 
 local fs, serde = require("@lune/fs"), require("@lune/serde")
 local task = require("@lune/task")
 local BotInfo:{token:string} = serde.decode("json", fs.readFile("./BotInfo.json"))
 
-local Intent = {
-	GUILDS = bit32.lshift(1, 0),
-	DIRECT_MESSAGES = bit32.lshift(1, 12),
-}
-
-local FinalIntent = 0
-for _, v in pairs(Intent) do FinalIntent += v end
-
-local Client:DiscordBot = Discord.New(FinalIntent, BotInfo.token, 0, 1)::any
+local Client:DiscordBot = Discord.New(Intents.Combine(Intents.Flags.DIRECT_MESSAGES, Intents.Flags.GUILDS, Intents.Flags.GUILD_MESSAGES), BotInfo.token, 0, 1)::any
 
 local AllowedParents = {
     ["1444445784199139458"] = { 
@@ -492,6 +488,19 @@ Client:On(Client.Enums.InteractionTypes.MODAL_SUBMIT, function(Packet)
     end
 
     return
+end)
+
+Client:On(Client.Enums.ChannelTypes.DM, function(Packet)
+    local author = Packet.author
+    if not author or author.bot == true then
+        return
+    end
+
+    local message = Client:CreateMessage()
+        :SetReference(Packet.id, Packet.channel_id)
+        :SetContent(Packet.content)
+
+    Client:SendMessage(Packet.channel_id, message)
 end)
 
 Logger:Info("Client started.")
