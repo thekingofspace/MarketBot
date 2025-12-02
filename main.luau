@@ -1,4 +1,5 @@
 local Logger = require("./Logger")
+local net = require("@lune/net")
 local Discord = require("./libs/Nactari"); require("./libs/NactariDependants")
 
 local Interactions = require("./libs/NactariInteractions")
@@ -502,6 +503,433 @@ Client:On(Client.Enums.ChannelTypes.DM, function(Packet)
 
     Client:SendMessage(Packet.channel_id, message)
 end)
+
+local Cooldowns = {}
+local COOLDOWN_SECONDS = 100
+
+Client:CreateCommand("check_forum", Client.Enums.CommandTypes.CHAT_INPUT)
+    :SetDescription("Resubmit this thread for moderator review.")
+    :AddParameter("reason", Client.Enums.ParamTypes.STRING, "Why should it be reviewed?", true)
+    :AddCallback(function(Packet)
+        local Requester = Packet.member and Packet.member.user or Packet.user
+        local UserID = Requester and Requester.id
+        
+        local Thread = Packet.channel
+        if not Thread or not Thread.thread_metadata then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ This command can only be used **inside a forum thread**.",
+                    flags = 64
+                }
+            })
+        end
+
+        local ThreadID = tostring(Thread.id)
+
+        if PendingRemovals[ThreadID] then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "⏳ This thread is **already pending moderator review**. Please wait for a moderator to respond.",
+                    flags = 64
+                }
+            })
+        end
+        
+        if UserID and Cooldowns[UserID] and not HasManageMessages(Packet) then
+            local TimeLeft = Cooldowns[UserID] - os.time()
+            if TimeLeft > 0 then
+                local Minutes = math.floor(TimeLeft / 60)
+                local Seconds = TimeLeft % 60
+                return Client:RespondInteraction(Packet, {
+                    type = 4,
+                    data = {
+                        content = string.format("⏱️ Please wait **%dm %ds** before using this command again.", Minutes, Seconds),
+                        flags = 64
+                    }
+                })
+            end
+        end
+        
+        local ParentID = tostring(Thread.parent_id)
+        local Info = AllowedParents[ParentID]
+
+        if not Info then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ This thread is **not part of a moderated forum category**.",
+                    flags = 64
+                }
+            })
+        end
+
+        local Reason = Packet.data.options[1] and Packet.data.options[1].value or "No reason provided"
+
+        local Messages = Client:SendContext("Get", `channels/{ThreadID}/messages?after=0&limit=1`)
+        local First = Messages and Messages[1]
+        if not First then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = { content = "❌ Could not fetch the thread's starting message.", flags = 64 }
+            })
+        end
+        
+        Client:RespondInteraction(Packet, {
+            type = 4,
+            data = {
+                content = "✔️ This thread has been **submitted for moderator review**.\nReason: `" .. Reason .. "`",
+                flags = 64
+            }
+        })
+
+        local author = First.author
+        local msg = First.content or "*No starting message*"
+        local Short = (#msg > 1000) and (msg:sub(1,997) .. "...") or msg
+        local ThreadTitle = Thread.name or "Untitled Thread"
+
+        local Embed = {
+            title = `Thread Re-Submitted: {Info.Identifer}`,
+            description =
+                "**Thread Title:** " .. ThreadTitle ..
+                "\n\n**Reason For Re-Check:**\n```" .. Reason .. "```" ..
+                "\n\n**Message Text:**\n" .."```\n" .. Short .. "\n```" ..
+                `\n\n<#{First.id}>`,
+            color = 0x00AEEF,
+            footer = { text = "Thread started by " .. (author and author.username or "Unknown") },
+            fields = {
+                {
+                    name = "Requested By",
+                    value = (Requester and Requester.username or "Unknown") .. ` (<@{Requester and Requester.id or "0"}>)`,
+                    inline = false
+                }
+            }
+        }
+
+        local Options = {}
+        for key in pairs(QuickRejectReasons) do
+            table.insert(Options, { label = key, value = key })
+        end
+
+        local Components = {
+            {
+                type = 1,
+                components = {
+                    { type = 2, style = 3, label = "Allow",  custom_id = "thread_allow_" .. ThreadID },
+                    { type = 2, style = 4, label = "Remove", custom_id = "thread_remove_" .. ThreadID }
+                }
+            },
+            {
+                type = 1,
+                components = {{
+                    type = 3,
+                    custom_id = "quick_reject_" .. ThreadID,
+                    options = Options,
+                    min_values = 1,
+                    max_values = 1,
+                    placeholder = "Quick Reject Reason"
+                }}
+            }
+        }
+
+        local Sent = Client:SendContext("Post", `channels/{Info.LogChannel}/messages`, {
+            embeds = {Embed},
+            components = Components
+        })
+
+        if Sent and Sent.id then
+            SetPending(ThreadID, {
+                message_id = Sent.id,
+                channel_id = Info.LogChannel,
+                category_name = Info.Identifer,
+                thread_title = ThreadTitle,
+                record_channel = Info.RecordChannel,
+                resubmit_reason = Reason,
+                requested_by = Requester and Requester.id or nil,
+            })
+            
+            if UserID then
+                Cooldowns[UserID] = os.time() + COOLDOWN_SECONDS
+            end
+        end
+
+        return
+    end)
+    
+
+local TOKEN_ADMIN_ID = "369266156709871619"
+
+local ValidTokens = {}
+
+local function GenerateToken()
+    local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    local token = ""
+    for i = 1, 32 do
+        local rand = math.random(1, #chars)
+        token = token .. chars:sub(rand, rand)
+    end
+    return token
+end
+
+local function SaveTokens()
+    local encoded = serde.encode("json", ValidTokens)
+    fs.writeFile("tokens.json", encoded)
+end
+
+Client:CreateCommand("create_token", Client.Enums.CommandTypes.CHAT_INPUT)
+    :SetDescription("Create a new API access token (Admin only)")
+    :AddCallback(function(Packet)
+        local Requester = Packet.member and Packet.member.user or Packet.user
+        local UserID = Requester and Requester.id
+        
+        if UserID ~= TOKEN_ADMIN_ID then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ You don't have permission to manage API tokens.",
+                    flags = 64
+                }
+            })
+        end
+        
+        local newToken = GenerateToken()
+        table.insert(ValidTokens, newToken)
+        SaveTokens()
+        
+        return Client:RespondInteraction(Packet, {
+            type = 4,
+            data = {
+                content = "✅ **New API token created:**\n```\n" .. newToken .. "\n```\n⚠️ Save this token securely - it won't be shown again!",
+                flags = 64
+            }
+        })
+    end)
+
+Client:CreateCommand("revoke_token", Client.Enums.CommandTypes.CHAT_INPUT)
+    :SetDescription("Revoke an API access token (Admin only)")
+    :AddParameter("token", Client.Enums.ParamTypes.STRING, "The token to revoke", true)
+    :AddCallback(function(Packet)
+        local Requester = Packet.member and Packet.member.user or Packet.user
+        local UserID = Requester and Requester.id
+        
+        if UserID ~= TOKEN_ADMIN_ID then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ You don't have permission to manage API tokens.",
+                    flags = 64
+                }
+            })
+        end
+        
+        local tokenToRevoke = Packet.data.options[1] and Packet.data.options[1].value
+        
+        if not tokenToRevoke then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ Please provide a token to revoke.",
+                    flags = 64
+                }
+            })
+        end
+        
+        local found = false
+        for i, token in ipairs(ValidTokens) do
+            if token == tokenToRevoke then
+                table.remove(ValidTokens, i)
+                found = true
+                break
+            end
+        end
+        
+        if found then
+            SaveTokens()
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "✅ **Token revoked successfully.**\n```\n" .. tokenToRevoke .. "\n```",
+                    flags = 64
+                }
+            })
+        else
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ Token not found in the system.",
+                    flags = 64
+                }
+            })
+        end
+    end)
+
+Client:CreateCommand("list_tokens", Client.Enums.CommandTypes.CHAT_INPUT)
+    :SetDescription("List all active API tokens (Admin only)")
+    :AddCallback(function(Packet)
+        local Requester = Packet.member and Packet.member.user or Packet.user
+        local UserID = Requester and Requester.id
+        
+        if UserID ~= TOKEN_ADMIN_ID then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "❌ You don't have permission to manage API tokens.",
+                    flags = 64
+                }
+            })
+        end
+        
+        if #ValidTokens == 0 then
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = "📋 No active tokens in the system.",
+                    flags = 64
+                }
+            })
+        end
+        
+        local tokenList = "📋 **Active API Tokens** (" .. #ValidTokens .. " total):\n\n"
+        for i, token in ipairs(ValidTokens) do
+            local masked = token:sub(1, 8) .. "..." .. token:sub(-4)
+            tokenList = tokenList .. i .. ". `" .. masked .. "`\n"
+        end
+        
+        return Client:RespondInteraction(Packet, {
+            type = 4,
+            data = {
+                content = tokenList,
+                flags = 64
+            }
+        })
+    end)
+
+
+local function LoadTokens()
+    local content = fs.readFile("./tokens.json")
+    if content then
+        local decoded = serde.decode("json", content)
+        if type(decoded) == "table" then
+            ValidTokens = decoded
+        end
+    end
+end
+
+LoadTokens()
+
+local function ValidateToken(req)
+    if not req.headers.auth then
+        return false, "no auth"
+    end
+
+    if not table.find(ValidTokens, tostring(req.headers.auth)) then
+        return false, "Invalid token"
+    end
+
+    return true
+end
+
+net.serve(0001, function(req)
+    if type(req) ~= "table" then
+        return { status = 400, body = "Invalid request format" }
+    end
+    
+    local isValid, errMsg = ValidateToken(req)
+    if not isValid then
+        return { 
+            status = 401, 
+            body = serde.encode("json", { error = errMsg })
+        }
+    end
+    
+    local method = req.method or "GET"
+    local path   = req.path or "/"
+    local body   = req.body or ""
+    
+    local function json(obj)
+        return serde.encode("json", obj)
+    end
+    
+    local function not_found()
+        return { status = 404, body = "Not Found" }
+    end
+    
+    if method == "GET" and path == "/queue" then
+        local out = {}
+        for threadId, info in pairs(PendingRemovals) do
+            out[#out + 1] = {
+                thread_id       = threadId,
+                category        = info.category_name,
+                thread_title    = info.thread_title,
+                message_id      = info.message_id,
+                channel_id      = info.channel_id,
+                record_channel  = info.record_channel,
+                requested_by    = info.requested_by,
+                resubmit_reason = info.resubmit_reason,
+            }
+        end
+        return {
+            status = 200,
+            body = json(out)
+        }
+    end
+    
+    local threadId = path:match("^/post/(%d+)$")
+    
+    if threadId then
+        local pending = PendingRemovals[threadId]
+        
+        if method == "GET" then
+            if not pending then
+                return not_found()
+            end
+            return {
+                status = 200,
+                body = json(pending)
+            }
+        end
+        
+        if method == "PATCH" then
+            if not pending then
+                return not_found()
+            end
+            local FakePacket = {
+                member = { user = { username = "NET_SERVER", id = "0" } }
+            }
+            HandleApproval(FakePacket, threadId)
+            return {
+                status = 200,
+                body = json({ message = "Approved", thread_id = threadId })
+            }
+        end
+        
+        if method == "DELETE" then
+            if not pending then
+                return not_found()
+            end
+            local reason = tostring(body or ""):match("^%s*(.-)%s*$")
+            if reason == "" then
+                return { status = 400, body = "Reject reason required in body" }
+            end
+            local Remover = { username = "NET_SERVER", id = "0" }
+            RejectThread(
+                threadId,
+                reason,
+                Remover,
+                pending.category_name,
+                pending.record_channel
+            )
+            return {
+                status = 200,
+                body = json({ message = "Rejected", thread_id = threadId, reason = reason })
+            }
+        end
+    end
+    
+    return not_found()
+end)
+
 
 Logger:Info("Client started.")
 Client:Start()
