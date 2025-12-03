@@ -191,7 +191,7 @@ local function LogApproval(ThreadID, Approver, RecordChannel)
             color = 0x00FF00,
             fields = {{
                 name = "Approved By",
-                value = Approver and (Approver.username .. " `" .. Approver.id .. "`)") or "Unknown"
+                value = Approver and (Approver.username .. " `" .. Approver.id .. "`") or "Unknown"
             }}
         }}
     })
