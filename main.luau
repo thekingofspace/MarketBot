@@ -30,7 +30,7 @@ local AllowedParents = {
         RecordChannel = "1444445891409875116";
         MinChars = 30;
         CreationMessage = `Please describe in depth what the issue you are having is.`
-    }
+    };
 }
 
 
@@ -327,6 +327,10 @@ Client:On("thread_create", function(Packet)
     local LogChannel = Info.LogChannel
     local RecordChannel = Info.RecordChannel
 
+    if not LogChannel or not RecordChannel then
+        return
+    end
+
     if #msg < Info.MinChars then
         if author and author.id then
             if UseFile then
@@ -507,155 +511,290 @@ local Cooldowns = {}
 local COOLDOWN_SECONDS = 100
 
 Client:CreateCommand("check_forum", Client.Enums.CommandTypes.CHAT_INPUT)
-    :SetDescription("Resubmit this thread for moderator review.")
-    :AddParameter("reason", Client.Enums.ParamTypes.STRING, "Why should it be reviewed?", true)
-    :AddCallback(function(Packet)
-        local Requester = Packet.member and Packet.member.user or Packet.user
-        local UserID = Requester and Requester.id
-        
-        local Thread = Packet.channel
-        if not Thread or not Thread.thread_metadata then
-            return Client:RespondInteraction(Packet, {
-                type = 4,
-                data = {
-                    content = "❌ This command can only be used **inside a forum thread**.",
-                    flags = 64
-                }
-            })
-        end
-
-        local ThreadID = tostring(Thread.id)
-
-        if PendingRemovals[ThreadID] then
-            return Client:RespondInteraction(Packet, {
-                type = 4,
-                data = {
-                    content = "⏳ This thread is **already pending moderator review**. Please wait for a moderator to respond.",
-                    flags = 64
-                }
-            })
-        end
-        
-        if UserID and Cooldowns[UserID] and not HasManageMessages(Packet) then
-            local TimeLeft = Cooldowns[UserID] - os.time()
-            if TimeLeft > 0 then
-                local Minutes = math.floor(TimeLeft / 60)
-                local Seconds = TimeLeft % 60
-                return Client:RespondInteraction(Packet, {
-                    type = 4,
-                    data = {
-                        content = string.format("⏱️ Please wait **%dm %ds** before using this command again.", Minutes, Seconds),
-                        flags = 64
-                    }
-                })
-            end
-        end
-        
-        local ParentID = tostring(Thread.parent_id)
-        local Info = AllowedParents[ParentID]
-
-        if not Info then
-            return Client:RespondInteraction(Packet, {
-                type = 4,
-                data = {
-                    content = "❌ This thread is **not part of a moderated forum category**.",
-                    flags = 64
-                }
-            })
-        end
-
-        local Reason = Packet.data.options[1] and Packet.data.options[1].value or "No reason provided"
-
-        local Messages = Client:SendContext("Get", `channels/{ThreadID}/messages?after=0&limit=1`)
-        local First = Messages and Messages[1]
-        if not First then
-            return Client:RespondInteraction(Packet, {
-                type = 4,
-                data = { content = "❌ Could not fetch the thread's starting message.", flags = 64 }
-            })
-        end
-        
-        Client:RespondInteraction(Packet, {
+:SetDescription("Resubmit this thread for moderator review.")
+:AddParameter("reason", Client.Enums.ParamTypes.STRING, "Why should it be reviewed?", true)
+:AddCallback(function(Packet)
+    local Requester = Packet.member and Packet.member.user or Packet.user
+    local UserID = Requester and Requester.id
+    
+    local Thread = Packet.channel
+    if not Thread or not Thread.thread_metadata then
+        return Client:RespondInteraction(Packet, {
             type = 4,
             data = {
-                content = "✔️ This thread has been **submitted for moderator review**.\nReason: `" .. Reason .. "`",
+                content = "❌ This command can only be used **inside a forum thread**.",
                 flags = 64
             }
         })
+    end
 
-        local author = First.author
-        local msg = First.content or "*No starting message*"
-        local Short = (#msg > 1000) and (msg:sub(1,997) .. "...") or msg
-        local ThreadTitle = Thread.name or "Untitled Thread"
+    local ThreadID = tostring(Thread.id)
 
-        local Embed = {
-            title = `Thread Re-Submitted: {Info.Identifer}`,
-            description =
-                "**Thread Title:** " .. ThreadTitle ..
-                "\n\n**Reason For Re-Check:**\n```" .. Reason .. "```" ..
-                "\n\n**Message Text:**\n" .."```\n" .. Short .. "\n```" ..
-                `\n\n<#{First.id}>`,
-            color = 0x00AEEF,
-            footer = { text = "Thread started by " .. (author and author.username or "Unknown") },
-            fields = {
-                {
-                    name = "Requested By",
-                    value = (Requester and Requester.username or "Unknown") .. ` (<@{Requester and Requester.id or "0"}>)`,
-                    inline = false
-                }
+    if PendingRemovals[ThreadID] then
+        return Client:RespondInteraction(Packet, {
+            type = 4,
+            data = {
+                content = "⏳ This thread is **already pending moderator review**. Please wait for a moderator to respond.",
+                flags = 64
             }
-        }
-
-        local Options = {}
-        for key in pairs(QuickRejectReasons) do
-            table.insert(Options, { label = key, value = key })
-        end
-
-        local Components = {
-            {
-                type = 1,
-                components = {
-                    { type = 2, style = 3, label = "Allow",  custom_id = "thread_allow_" .. ThreadID },
-                    { type = 2, style = 4, label = "Remove", custom_id = "thread_remove_" .. ThreadID }
-                }
-            },
-            {
-                type = 1,
-                components = {{
-                    type = 3,
-                    custom_id = "quick_reject_" .. ThreadID,
-                    options = Options,
-                    min_values = 1,
-                    max_values = 1,
-                    placeholder = "Quick Reject Reason"
-                }}
-            }
-        }
-
-        local Sent = Client:SendContext("Post", `channels/{Info.LogChannel}/messages`, {
-            embeds = {Embed},
-            components = Components
         })
-
-        if Sent and Sent.id then
-            SetPending(ThreadID, {
-                message_id = Sent.id,
-                channel_id = Info.LogChannel,
-                category_name = Info.Identifer,
-                thread_title = ThreadTitle,
-                record_channel = Info.RecordChannel,
-                resubmit_reason = Reason,
-                requested_by = Requester and Requester.id or nil,
-            })
-            
-            if UserID then
-                Cooldowns[UserID] = os.time() + COOLDOWN_SECONDS
-            end
-        end
-
-        return
-    end)
+    end
     
+    if UserID and Cooldowns[UserID] and not HasManageMessages(Packet) then
+        local TimeLeft = Cooldowns[UserID] - os.time()
+        if TimeLeft > 0 then
+            local Minutes = math.floor(TimeLeft / 60)
+            local Seconds = TimeLeft % 60
+            return Client:RespondInteraction(Packet, {
+                type = 4,
+                data = {
+                    content = string.format("⏱️ Please wait **%dm %ds** before using this command again.", Minutes, Seconds),
+                    flags = 64
+                }
+            })
+        end
+    end
+    
+    local ParentID = tostring(Thread.parent_id)
+    local Info = AllowedParents[ParentID]
+
+    if not Info then
+        return Client:RespondInteraction(Packet, {
+            type = 4,
+            data = {
+                content = "❌ This thread is **not part of a moderated forum category**.",
+                flags = 64
+            }
+        })
+    end
+
+    local Reason = Packet.data.options[1] and Packet.data.options[1].value or "No reason provided"
+
+    local Messages = Client:SendContext("Get", `channels/{ThreadID}/messages?after=0&limit=1`)
+    local First = Messages and Messages[1]
+    if not First then
+        return Client:RespondInteraction(Packet, {
+            type = 4,
+            data = { content = "❌ Could not fetch the thread's starting message.", flags = 64 }
+        })
+    end
+    
+    Client:RespondInteraction(Packet, {
+        type = 4,
+        data = {
+            content = "✔️ This thread has been **submitted for moderator review**.\nReason: `" .. Reason .. "`",
+            flags = 64
+        }
+    })
+
+    local author = First.author
+    local msg = First.content or "*No starting message*"
+    local Short = (#msg > 1000) and (msg:sub(1,997) .. "...") or msg
+    local ThreadTitle = Thread.name or "Untitled Thread"
+
+    local Embed = {
+        title = `Thread Re-Submitted: {Info.Identifer}`,
+        description =
+            "**Thread Title:** " .. ThreadTitle ..
+            "\n\n**Reason For Re-Check:**\n```" .. Reason .. "```" ..
+            "\n\n**Message Text:**\n" .."```\n" .. Short .. "\n```" ..
+            `\n\n<#{First.id}>`,
+        color = 0x00AEEF,
+        footer = { text = "Thread started by " .. (author and author.username or "Unknown") },
+        fields = {
+            {
+                name = "Requested By",
+                value = (Requester and Requester.username or "Unknown") .. ` (<@{Requester and Requester.id or "0"}>)`,
+                inline = false
+            }
+        }
+    }
+
+    local Options = {}
+    for key in pairs(QuickRejectReasons) do
+        table.insert(Options, { label = key, value = key })
+    end
+
+    local Components = {
+        {
+            type = 1,
+            components = {
+                { type = 2, style = 3, label = "Allow",  custom_id = "thread_allow_" .. ThreadID },
+                { type = 2, style = 4, label = "Remove", custom_id = "thread_remove_" .. ThreadID }
+            }
+        },
+        {
+            type = 1,
+            components = {{
+                type = 3,
+                custom_id = "quick_reject_" .. ThreadID,
+                options = Options,
+                min_values = 1,
+                max_values = 1,
+                placeholder = "Quick Reject Reason"
+            }}
+        }
+    }
+
+    local Sent = Client:SendContext("Post", `channels/{Info.LogChannel}/messages`, {
+        embeds = {Embed},
+        components = Components
+    })
+
+    if Sent and Sent.id then
+        SetPending(ThreadID, {
+            message_id = Sent.id,
+            channel_id = Info.LogChannel,
+            category_name = Info.Identifer,
+            thread_title = ThreadTitle,
+            record_channel = Info.RecordChannel,
+            resubmit_reason = Reason,
+            requested_by = Requester and Requester.id or nil,
+        })
+        
+        if UserID then
+            Cooldowns[UserID] = os.time() + COOLDOWN_SECONDS
+        end
+    end
+
+    return
+end)
+    
+Client:CreateCommand("log_thread", Client.Enums.CommandTypes.CHAT_INPUT)
+:SetDescription("log a thread into its logging channel")
+:AddParameter("should_lock", Client.Enums.ParamTypes.BOOLEAN, "Should this lock the thread?", true)
+:AddParameter("should_delete", Client.Enums.ParamTypes.BOOLEAN, "Should this delete the thread after logging?", true)
+:AddCallback(function(Packet:any)
+
+    if not HasManageMessages(Packet) then
+        Client:RespondInteraction(Packet, {
+            type = 4,
+            data = { content = "❌ You are not allowed to use this command.", flags = 64 }
+        })
+        return
+    end
+
+    local Channel = Packet.channel
+    local Options = Packet.data.options
+
+    if not Channel.thread_metadata then
+        Client:RespondInteraction(Packet, {
+            type = 4,
+            data = { content = "❌ Channel must be a thread", flags = 64 }
+        })
+        return
+    end
+
+    if not AllowedParents[tostring(Channel.parent_id)] then
+        Client:RespondInteraction(Packet, {
+            type = 4,
+            data = { content = "❌ Invalid Section", flags = 64 }
+        })
+        return
+    end
+
+    local Info = AllowedParents[tostring(Channel.parent_id)]
+    local ThreadID = tostring(Channel.id)
+
+    Logger:Info("Begun logging thread " .. ThreadID)
+
+    local ShouldLock   = Options[1].value
+    local ShouldDelete = Options[2].value
+
+    if ShouldLock == true then
+        task.spawn(function()
+            Client:SendContext("Patch", `channels/{ThreadID}`, { locked = true })
+        end)
+    end
+
+    Client:RespondInteraction(Packet, {
+        type = 4,
+        data = { content = "⏳ Collecting thread logs..." }
+    })
+
+
+    local All = {}
+    local Cursor = nil
+    local Fetching = true
+
+    while Fetching do
+        local Route = Cursor
+            and `channels/{ThreadID}/messages?before={Cursor}&limit=100`
+            or  `channels/{ThreadID}/messages?limit=100`
+
+        local Batch = Client:SendContext("Get", Route)
+
+        if type(Batch) ~= "table" or #Batch == 0 then
+            Fetching = false
+        else
+            for _, msg in ipairs(Batch) do
+                table.insert(All, msg)
+            end
+            Cursor = Batch[#Batch].id
+        end
+        table.clear(Batch)
+        task.wait(0.9)
+    end
+
+    table.sort(All, function(a, b)
+        return a.id < b.id
+    end)
+
+    if #All == 0 then
+        return Client:SendContext("Post", `channels/{Info.RecordChannel}/messages`, {
+            content = "⚠️ No messages found in thread."
+        })
+    end
+
+    local Lines = {}
+
+    table.insert(Lines, "=== THREAD LOG EXPORT ===")
+    table.insert(Lines, "Thread: " .. (Channel.name or "Unnamed Thread"))
+    table.insert(Lines, "Thread ID: " .. ThreadID)
+    table.insert(Lines, "Category: " .. Info.Identifer)
+    table.insert(Lines, "Message Count: " .. tostring(#All))
+    table.insert(Lines, string.rep("=", 50))
+    table.insert(Lines, "")
+
+    for _, msg in ipairs(All) do
+        local Author = msg.author and (msg.author.username .. " (" .. msg.author.id .. ")") or "Unknown"
+        local Text   = msg.content or ""
+        local Stamp  = msg.timestamp or "no timestamp"
+
+        table.insert(Lines, Author .. " - [" .. Stamp .. "]")
+        table.insert(Lines, Text)
+        table.insert(Lines, "\n")
+    end
+
+    local ExportText = table.concat(Lines, "\n")
+
+    local FileName = `log_{ThreadID}.txt`
+
+    SendMultipart(
+        Client,
+        "Post",
+        `channels/{Info.RecordChannel}/messages`,
+        {
+            content = "📝 Thread log export for **" .. (Channel.name or "Unknown") .. "**"
+        },
+        FileName,
+        ExportText
+    )
+
+    Client:SendContext("Post", `channels/{Packet.channel_id}/messages`, {
+        content = "✔️ **Thread has been logged** to <#" .. Info.RecordChannel .. ">."
+    })
+
+    if ShouldDelete == true then
+        task.spawn(function()
+            task.wait(1)
+            Client:SendContext("Delete", `channels/{ThreadID}`)
+        end)
+    end
+    Logger:Info("Logging completed on " .. ThreadID)
+    return
+end)
+
 
 Logger:Info("Client started.")
 Client:Start()
