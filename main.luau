@@ -795,6 +795,37 @@ Client:CreateCommand("log_thread", Client.Enums.CommandTypes.CHAT_INPUT)
     return
 end)
 
+local function SnowflakeToUnixSeconds(id)
+    local snow = tonumber(id)
+    
+    local timestamp_ms = math.floor(snow / 4194304) + 1420070400000
+    
+    return math.floor(timestamp_ms / 1000)
+end
+
+
+Client:CreateCommand("ping", Client.Enums.CommandTypes.CHAT_INPUT)
+:SetDescription("test the latency")
+:AddCallback(function(Packet)
+    local CommandUnix = SnowflakeToUnixSeconds(Packet.id)
+
+    local Now = os.time()
+
+    local LatencyMs = ((Now - CommandUnix) * 1000)
+
+    local TimestampRelative = "<t:" .. CommandUnix .. ":R>"
+
+    Client:RespondInteraction(Packet, {
+        type = 4,
+        data = {
+            content = ("🏓 **Pong!**\nCommand sent %s\nLatency: `%dms`")
+                :format(TimestampRelative, LatencyMs);
+
+                flags = 64
+        }
+    })
+end)
+
 
 Logger:Info("Client started.")
 Client:Start()
